@@ -1,19 +1,17 @@
 """
-
-Modified from scikit-image slic method
+maskSLIC: Modified from scikit-image slic method
 
 Original code (C) scikit-image
+Modifications (C) 2016-2019 Benjamin Irving
 
-Modifications (C) Benjamin Irving
-
-See licence.txt for more details
-
+See LICENSE.txt for more details
 """
 
 #cython: cdivision=True
 #cython: boundscheck=False
 #cython: nonecheck=False
 #cython: wraparound=False
+
 from libc.float cimport DBL_MAX
 from cpython cimport bool
 
@@ -22,7 +20,6 @@ cimport numpy as np
 
 from skimage.util import regular_grid
 
-
 def _slic_cython(double[:, :, :, ::1] image_zyx,
                  int[:, :, ::1] mask,
                  double[:, ::1] segments,
@@ -30,34 +27,26 @@ def _slic_cython(double[:, :, :, ::1] image_zyx,
                  Py_ssize_t max_iter,
                  double[::1] spacing,
                  bint slic_zero,
+                 double feat_norm,
                  bint only_dist):
+    """
+    Helper function for SLIC maskslic.
 
-    """Helper function for SLIC maskslic.
+    :param image_zyx: 4D array of double, shape (Z, Y, X, C)
+                      The input image.
+    :param segments:  2D array of double, shape (N, 3 + C)
+                      The initial centroids obtained by SLIC as [Z, Y, X, C...].
+    :param step:      The size of the step between two seeds in voxels.
+    :param max_iter:  The maximum number of k-means iterations.
+    :param spacing:   1D array of double, shape (3,)
+                      The voxel spacing along each image dimension. This parameter
+                      controls the weights of the distances along z, y, and x during
+                      k-means clustering.
+    :param slic_zero: True to run SLIC-zero, False to run original SLIC.
 
-    Parameters
-    ----------
-    image_zyx : 4D array of double, shape (Z, Y, X, C)
-        The input image.
-    segments : 2D array of double, shape (N, 3 + C)
-        The initial centroids obtained by SLIC as [Z, Y, X, C...].
-    step : double
-        The size of the step between two seeds in voxels.
-    max_iter : int
-        The maximum number of k-means iterations.
-    spacing : 1D array of double, shape (3,)
-        The voxel spacing along each image dimension. This parameter
-        controls the weights of the distances along z, y, and x during
-        k-means clustering.
-    slic_zero : bool
-        True to run SLIC-zero, False to run original SLIC.
+    :return:          3D array of int, shape (Z, Y, X)
+                      The label field/superpixels found by SLIC.
 
-    Returns
-    -------
-    nearest_segments : 3D array of int, shape (Z, Y, X)
-        The label field/superpixels found by SLIC.
-
-    Notes
-    -----
     The image is considered to be in (z, y, x) order, which can be
     surprising. More commonly, the order (x, y, z) is used. However,
     in 3D image analysis, 'z' is usually the "special" dimension, with,
@@ -102,8 +91,9 @@ def _slic_cython(double[:, :, :, ::1] image_zyx,
 
     cdef Py_ssize_t i, c, k, x, y, z, x_min, x_max, y_min, y_max, z_min, z_max
     cdef char change
-    cdef double dist_center, cx, cy, cz, dy, dz
+    cdef double dist_center, dist_feat, cx, cy, cz, dx, dy, dz
 
+    # voxel spacing
     cdef double sz, sy, sx
     sz = spacing[0]
     sy = spacing[1]
@@ -130,7 +120,7 @@ def _slic_cython(double[:, :, :, ::1] image_zyx,
                 cy = segments[k, 1]
                 cx = segments[k, 2]
 
-                # compute windows
+                # compute windows (2 step sizes in each direction around the cluster centre)
                 z_min = <Py_ssize_t>max(cz - 2 * step_z, 0)
                 z_max = <Py_ssize_t>min(cz + 2 * step_z + 1, depth)
                 y_min = <Py_ssize_t>max(cy - 2 * step_y, 0)
@@ -138,27 +128,38 @@ def _slic_cython(double[:, :, :, ::1] image_zyx,
                 x_min = <Py_ssize_t>max(cx - 2 * step_x, 0)
                 x_max = <Py_ssize_t>min(cx + 2 * step_x + 1, width)
 
+                # loop over the current region for the current cluster
                 for z in range(z_min, z_max):
+                    # distance from cluster centre z (taking into account voxel size)
                     dz = (sz * (cz - z)) ** 2
                     for y in range(y_min, y_max):
+                        # distance from cluster centre y (taking into account voxel size)
                         dy = (sy * (cy - y)) ** 2
                         for x in range(x_min, x_max):
+                            dx = (sx * (cx - x)) ** 2
 
                             if mask[z, y, x] == 0:
                                 nearest_segments[z, y, x] = -1
                                 continue
 
-                            dist_center = (dz + dy + (sx * (cx - x)) ** 2) * spatial_weight
-                            dist_color = 0
+                            # squared distance from the centre
+                            dist_center = (dx + dy + dz) * spatial_weight
+
+                            # looping over the image features
+                            dist_feat = 0
                             for c in range(3, n_features):
-                                dist_color += (image_zyx[z, y, x, c - 3]
+                                # adding the normalised image features squared to the distance
+                                dist_feat += (image_zyx[z, y, x, c - 3]
                                                 - segments[k, c]) ** 2
                             if slic_zero:
                                 # TODO not implemented yet for slico
-                                dist_center += dist_color / max_dist_color[k]
+                                dist_center += dist_feat / max_dist_color[k]
                             else:
+                                # normalising by the number of features
+                                dist_feat = dist_feat / feat_norm
+                                # adding distance and features
                                 if not only_dist:
-                                    dist_center += dist_color
+                                    dist_center += dist_feat
 
                             #assign new distance and new label to voxel if closer than other voxels
                             if distance[z, y, x] > dist_center:
@@ -232,23 +233,18 @@ def _enforce_label_connectivity_cython(int[:, :, ::1] segments,
                                        Py_ssize_t n_segments,
                                        Py_ssize_t min_size,
                                        Py_ssize_t max_size):
-    """ Helper function to remove small disconnected regions from the labels
+    """
+    Helper function to remove small disconnected regions from the labels
 
-    Parameters
-    ----------
-    segments : 3D array of int, shape (Z, Y, X)
-        The label field/superpixels found by SLIC.
-    n_segments: int
-        Number of specified segments
-    min_size: int
-        Minimum size of the segment
-    max_size: int
-        Maximum size of the segment. This is done for performance reasons,
-        to pre-allocate a sufficiently large array for the breadth first search
-    Returns
-    -------
-    connected_segments : 3D array of int, shape (Z, Y, X)
-        A label field with connected labels starting at label=1
+    :param segments:   3D array of int, shape (Z, Y, X)
+                       The label field/superpixels found by SLIC.
+    :param n_segments: Number of specified segments
+    :param min_size:   Minimum size of the segment
+    :param max_size:   Maximum size of the segment. This is done for performance reasons,
+                       to pre-allocate a sufficiently large array for the breadth first search
+
+    :return:           3D array of int, shape (Z, Y, X)
+                       A label field with connected labels starting at label=1
     """
 
     # get image dimensions
@@ -343,12 +339,9 @@ def _enforce_label_connectivity_cython(int[:, :, ::1] segments,
 
 def _find_adjacency_map(int[:, :, ::1] segments):
     """
-
-    @param segments: slic labelled image
-    @return:
-    border_mat = labels that border the first or last axial slice
-    all_border_mat = labels that border any edge (To do)
-
+    :param segments: slic labelled image
+    :return:         border_mat = labels that border the first or last axial slice
+                     all_border_mat = labels that border any edge (To do)
     """
 
     # get image dimensions
@@ -358,9 +351,9 @@ def _find_adjacency_map(int[:, :, ::1] segments):
     width = segments.shape[2]
 
     # neighborhood arrays (Py_ssize_t is the proper python definition for array indices)
-    cdef Py_ssize_t[::1] ddx = np.array((1, -1, 0, 0, 0, 0))
-    cdef Py_ssize_t[::1] ddy = np.array((0, 0, 1, -1, 0, 0))
-    cdef Py_ssize_t[::1] ddz = np.array((0, 0, 0, 0, 1, -1))
+    cdef Py_ssize_t[::1] ddx = np.array((1, -1, 0, 0, 0, 0), dtype=np.intp)
+    cdef Py_ssize_t[::1] ddy = np.array((0, 0, 1, -1, 0, 0), dtype=np.intp)
+    cdef Py_ssize_t[::1] ddz = np.array((0, 0, 0, 0, 1, -1), dtype=np.intp)
 
     cdef Py_ssize_t zz, yy, xx
     cdef Py_ssize_t z, y, x
@@ -372,8 +365,6 @@ def _find_adjacency_map(int[:, :, ::1] segments):
     max_lab = np.max(segments)
     cdef Py_ssize_t[:, ::1] adj_mat = np.zeros((max_lab + 1, max_lab + 1), dtype=np.intp)
     cdef Py_ssize_t[::1] border_mat = np.zeros((max_lab +1), dtype=np.intp)
-
-    # cdef Py_ssize_t marker1 = 1
 
     # loop through all image
     for z in range(depth):
@@ -405,10 +396,8 @@ def _find_adjacency_map(int[:, :, ::1] segments):
 
 def _find_adjacency_map_mask(np.ndarray[np.int32_t, ndim=3] segmentsnp):
     """
-
-    @param segments: slic labelled image
-    @return:
-    border_mat = labels that border the mask
+    :param segments: slic labelled image
+    :return:         border_mat = labels that border the mask
     """
 
     # get image dimensions
@@ -418,9 +407,9 @@ def _find_adjacency_map_mask(np.ndarray[np.int32_t, ndim=3] segmentsnp):
     width = segmentsnp.shape[2]
 
     # neighborhood arrays (Py_ssize_t is the proper python definition for array indices)
-    cdef Py_ssize_t[::1] ddx = np.array((1, -1, 0, 0, 0, 0))
-    cdef Py_ssize_t[::1] ddy = np.array((0, 0, 1, -1, 0, 0))
-    cdef Py_ssize_t[::1] ddz = np.array((0, 0, 0, 0, 1, -1))
+    cdef Py_ssize_t[::1] ddx = np.array((1, -1, 0, 0, 0, 0), dtype=np.intp)
+    cdef Py_ssize_t[::1] ddy = np.array((0, 0, 1, -1, 0, 0), dtype=np.intp)
+    cdef Py_ssize_t[::1] ddz = np.array((0, 0, 0, 0, 1, -1), dtype=np.intp)
 
     cdef Py_ssize_t zz, yy, xx
     cdef Py_ssize_t z, y, x
@@ -434,8 +423,6 @@ def _find_adjacency_map_mask(np.ndarray[np.int32_t, ndim=3] segmentsnp):
     cdef Py_ssize_t[::1] border_mat = np.zeros((max_lab +1), dtype=np.intp)
 
     cdef int[:, :, :] segments = segmentsnp
-
-    # cdef Py_ssize_t marker1 = 1
 
     # loop through all image
     for z in range(depth):

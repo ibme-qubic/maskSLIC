@@ -130,7 +130,7 @@ KWARGS = {
     'description' : 'Simple linear iterative clustering (SLIC) in a region of interest (ROI)',
     'long_description' : get_filetext(MODULE_DIR, 'README.md'),
     'long_description_content_type' : 'text/markdown',
-    'url' : 'www.birving.com',
+    'url' : 'https://www.birving.com',
     'author' : 'Benjamin Irving',
     'author_email' : 'mail@birving.com',
     'license' : 'Copyright (C) 2016-2019, Benjamin Irving. See LICENSE file for distribution conditions',

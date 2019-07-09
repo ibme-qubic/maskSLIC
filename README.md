@@ -13,11 +13,11 @@ An outline of the method is available at: http://arxiv.org/abs/1606.09518
 
 Figure 1: An example region and the automatically placed seed points using this method. 
 
-![seed points](outputs/p1.png)
+![seed points](doc/images/p1.png)
 
 Figure 2: The final superpixel regions within the ROI
 
-![superpixels](outputs/p2.png)
+![superpixels](doc/images/p2.png)
 
 ## Getting started
 

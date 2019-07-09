@@ -1,37 +1,31 @@
 """
-
-Modified from scikit-image slic method
+maskSLIC: Modified from scikit-image slic method
 
 Original code (C) scikit-image
+Modification (C) 2016-2019 Benjamin Irving
 
-Modification (C) Benjamin Irving
-
-See licence.txt for more details
-
+See LICENSE.txt for more details
 """
 
 # coding=utf-8
 from __future__ import division, absolute_import, unicode_literals, print_function
+
+import warnings
 import collections as coll
+
 import numpy as np
+
 from scipy import ndimage as ndi
 from scipy.ndimage.morphology import distance_transform_edt
 from scipy.ndimage.filters import gaussian_filter
 
-from maskslic.processing import get_mpd
-import warnings
-import matplotlib.pyplot as plt
-# from skimage.segmentation import mark_boundaries
-
-
 from skimage.util import img_as_float, regular_grid
-from maskslic._slic import (_slic_cython,
-                            _enforce_label_connectivity_cython)
 from skimage.color import rgb2lab
 
+from ._slic import _slic_cython, _enforce_label_connectivity_cython
+from .processing import get_mpd
 
-def place_seed_points(image, img, mask, n_segments, spacing, q=99.99):
-
+def place_seed_points(image, mask, n_segments, spacing):
     """
     Method for placing seed points in an ROI
 
@@ -41,65 +35,44 @@ def place_seed_points(image, img, mask, n_segments, spacing, q=99.99):
      Maxmin facility location
     https://en.wikipedia.org/wiki/Facility_location_problem
 
-    Parameters
-    ----------
-    image
-    mask
-    n_segments
-    spacing
+    :param image:
+    :param mask:
+    :param n_segments:
+    :param spacing:
 
-    Returns
-    -------
-
+    :return:
     """
-
     segments_z = np.zeros(n_segments, dtype=np.int64)
     segments_y = np.zeros(n_segments, dtype=np.int64)
     segments_x = np.zeros(n_segments, dtype=np.int64)
 
     m_inv = np.copy(mask)
-    nz = np.nonzero(m_inv)
-    p = [np.min(nz[0]), np.min(nz[1]), np.min(nz[2])]
-    pend = [np.max(nz[0]), np.max(nz[1]), np.max(nz[2])]
-    # cropping to bounding box around ROI
-    m_inv = m_inv[p[0]:pend[0]+1, p[1]:pend[1]+1, p[2]:pend[2]+1]
+
+    # Cropping to bounding box around ROI
+    nonzero_x, nonzero_y, nonzero_z = np.nonzero(m_inv)
+    bbox_start = [np.min(nonzero_x), np.min(nonzero_y), np.min(nonzero_z)]
+    bbox_end = [np.max(nonzero_x), np.max(nonzero_y), np.max(nonzero_z)]
+    m_inv = m_inv[bbox_start[0]:bbox_end[0]+1, bbox_start[1]:bbox_end[1]+1, bbox_start[2]:bbox_end[2]+1]
 
     # SEED STEP 1:  n seeds are placed as far as possible from every other seed and the edge.
+    for seg_idx in range(n_segments):
 
-    for ii in range(n_segments):
-
-        # distance transform
-
+        # Distance transform
         dtrans = distance_transform_edt(m_inv, sampling=spacing)
         dtrans = gaussian_filter(dtrans, sigma=0.1)
 
-        # sizes = ndi.sum(mask_dtrans, pdtrans, range(nb_labels + 1))
         # Use the maximum locations for the first two points
         coords1 = np.nonzero(dtrans == np.max(dtrans))
-        segments_z[ii] = coords1[0][0]
-        segments_x[ii] = coords1[1][0]
-        segments_y[ii] = coords1[2][0]
+        segments_z[seg_idx] = coords1[0][0]
+        segments_x[seg_idx] = coords1[1][0]
+        segments_y[seg_idx] = coords1[2][0]
 
-        # adding a new point
-        m_inv[segments_z[ii], segments_x[ii], segments_y[ii]] = False
+        # Adding a new point
+        m_inv[segments_z[seg_idx], segments_x[seg_idx], segments_y[seg_idx]] = False
 
-        # Plot: Illustrate the seed point selection method
-
-        # plt.figure()
-        # plt.imshow(img)
-        # my_cmap = plt.cm.get_cmap('jet')  # get a copy of the gray color map
-        # my_cmap.set_bad(alpha=0)  # s
-        # d11 = dtrans[segments_z[ii], :, :]
-        # d11[d11==0] = np.nan
-        # plt.imshow(d11, cmap=my_cmap)
-        # plt.contour(mask[segments_z[ii], :, :] == 1, contours=1, colors='red', linewidths=1)
-        # plt.plot(segments_y[ii], segments_x[ii], marker='o', color='green')
-        # plt.axis('off')
-        # plt.show()
-
-    segments_z = segments_z + p[0]
-    segments_x = segments_x + p[1]
-    segments_y = segments_y + p[2]
+    segments_z = segments_z + bbox_start[0]
+    segments_x = segments_x + bbox_start[1]
+    segments_y = segments_y + bbox_start[2]
 
     segments_color = np.zeros((segments_z.shape[0], image.shape[3]))
     segments = np.concatenate([segments_z[..., np.newaxis],
@@ -107,31 +80,29 @@ def place_seed_points(image, img, mask, n_segments, spacing, q=99.99):
                                segments_y[..., np.newaxis],
                                segments_color], axis=1)
 
-    sz = np.ascontiguousarray(segments_z, dtype=np.int32)
-    sx = np.ascontiguousarray(segments_x, dtype=np.int32)
-    sy = np.ascontiguousarray(segments_y, dtype=np.int32)
+    segments_z = np.ascontiguousarray(segments_z, dtype=np.int32)
+    segments_x = np.ascontiguousarray(segments_x, dtype=np.int32)
+    segments_y = np.ascontiguousarray(segments_y, dtype=np.int32)
 
-    out1 = get_mpd(sz, sx, sy)
+    out1 = get_mpd(segments_z, segments_x, segments_y)
     step_z, step_x, step_y = out1[0], out1[1], out1[2]
 
     return segments, step_x, step_y, step_z
 
-
 def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
-         spacing=None, multichannel=True, convert2lab=None,
+         seed_type='grid', spacing=None, multichannel=True, convert2lab=None,
          enforce_connectivity=False, min_size_factor=0.5, max_size_factor=3,
-         slic_zero=False, seed_type='grid', mask=None, recompute_seeds=False, 
-         plot_examples=False):
-    """Segments image using k-means clustering in Color-(x,y,z) space.
+         slic_zero=False, multifeat=False, return_adjacency=False, mask=None,
+         return_segments=False, recompute_seeds=False):
+    """
+    Segments image using k-means clustering in Color-(x,y,z) space.
 
-    Parameters
-    ----------
-    image : 2D, 3D or 4D ndarray
+    :param image: 2D, 3D or 4D ndarray
         Input image, which can be 2D or 3D, and grayscale or multichannel
         (see `multichannel` parameter).
-    n_segments : int, optional
+    :param n_segments: int, optional
         The (approximate) number of labels in the segmented output image.
-    compactness : float, optional
+    :param compactness: float, optional
         Balances color proximity and space proximity. Higher values give
         more weight to space proximity, making superpixel shapes more
         square/cubic. In SLICO mode, this is the initial compactness.
@@ -139,44 +110,42 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
         shapes of objects in the image. We recommend exploring possible
         values on a log scale, e.g., 0.01, 0.1, 1, 10, 100, before
         refining around a chosen value.
-    max_iter : int, optional
+    :param max_iter: int, optional
         Maximum number of iterations of k-means.
-    sigma : float or (3,) array-like of floats, optional
+    :param sigma: float or (3,) array-like of floats, optional
         Width of Gaussian smoothing kernel for pre-processing for each
         dimension of the image. The same sigma is applied to each dimension in
         case of a scalar value. Zero means no smoothing.
         Note, that `sigma` is automatically scaled if it is scalar and a
         manual voxel spacing is provided (see Notes section).
-    spacing : (3,) array-like of floats, optional
+    :param spacing: (3,) array-like of floats, optional
         The voxel spacing along each image dimension. By default, `slic`
         assumes uniform spacing (same voxel resolution along z, y and x).
         This parameter controls the weights of the distances along z, y,
         and x during k-means clustering.
-    multichannel : bool, optional
+    :param multichannel: bool, optional
         Whether the last axis of the image is to be interpreted as multiple
         channels or another spatial dimension.
-    convert2lab : bool, optional
+    :param convert2lab: bool, optional
         Whether the input should be converted to Lab colorspace prior to
         maskslic. The input image *must* be RGB. Highly recommended.
         This option defaults to ``True`` when ``multichannel=True`` *and*
         ``image.shape[-1] == 3``.
-    enforce_connectivity: bool, optional
+    :param enforce_connectivity: bool, optional
         Whether the generated segments are connected or not
-    min_size_factor: float, optional
+    :param min_size_factor: float, optional
         Proportion of the minimum segment size to be removed with respect
         to the supposed segment size ```depth*width*height/n_segments```
-    max_size_factor: float, optional
+    :param max_size_factor: float, optional
         Proportion of the maximum connected segment size. A value of 3 works
         in most of the cases.
-    slic_zero: bool, optional
+    :param slic_zero: bool, optional
         Run SLIC-zero, the zero-parameter mode of SLIC. [2]_
-    mask: ndarray of bools or 0s and 1s, optional
+    :param mask: ndarray of bools or 0s and 1s, optional
         Array of same shape as `image`. Supervoxel analysis will only be performed on points at
         which mask == True
 
-    Returns
-    -------
-    labels : 2D or 3D array
+    :return: labels : 2D or 3D array
         Integer mask indicating segment labels.
 
     Raises
@@ -204,7 +173,7 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
     References
     ----------
     .. [1] Radhakrishna Achanta, Appu Shaji, Kevin Smith, Aurelien Lucchi,
-        Pascal Fua, and Sabine Süsstrunk, SLIC Superpixels Compared to
+        Pascal Fua, and Sabine Susstrunk, SLIC Superpixels Compared to
         State-of-the-art Superpixel Methods, TPAMI, May 2012.
     .. [2] http://ivrg.epfl.ch/research/superpixels#SLICO
 
@@ -220,31 +189,17 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
     >>> segments = slic(img, n_segments=100, compactness=20)
 
     """
-
-    # if enforce_connectivity:
-    #    raise NotImplementedError("Enforce connectivity has not been implemented yet for maskSLIC.\n"
-    #                              "Please set enforce connectivity to 'False' ")
-
     if slic_zero:
         raise NotImplementedError("Slic zero has not been implemented yet for maskSLIC.")
 
-
-    img = np.copy(image)
-    if mask is not None:
-        msk = np.copy(mask==1)
-    else:
-        msk = None
-    # print("mask shape", msk.shape)
-
     if mask is None and seed_type == 'nplace':
-        warnings.warn('nrandom assignment of seed points should only be used with an ROI. Changing seed type.')
-        seed_type = 'size'
+        warnings.warn('nplace assignment of seed points should only be used with an ROI. Changing seed type.')
+        seed_type = 'grid'
 
     if seed_type == 'nplace' and recompute_seeds is False:
         warnings.warn('Seeds should be recomputed when seed points are randomly assigned')
 
     image = img_as_float(image)
-
     is_2d = False
     if image.ndim == 2:
         # 2D grayscale image
@@ -257,14 +212,6 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
     elif image.ndim == 3 and not multichannel:
         # Add channel as single last dimension
         image = image[..., np.newaxis]
-
-    if mask is None:
-        mask = np.ones(image.shape[:3], dtype=np.bool)
-    else:
-        mask = np.asarray(mask, dtype=np.bool)
-
-    if mask.ndim == 2:
-        mask = mask[np.newaxis, ...]
 
     if spacing is None:
         spacing = np.ones(3)
@@ -287,12 +234,24 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
         elif image.shape[-1] == 3:
             image = rgb2lab(image)
 
+    if multifeat:
+        feat_scale = float(image.shape[3])
+    else:
+        feat_scale = 1.0
+
     depth, height, width = image.shape[:3]
+
+    if mask is None:
+        mask = np.ones(image.shape[:3], dtype=np.bool)
+    else:
+        mask = np.asarray(mask, dtype=np.bool)
+
+    if mask.ndim == 2:
+        mask = mask[np.newaxis, ...]
 
     if seed_type == 'nplace':
 
-        segments, step_x, step_y, step_z = place_seed_points(image, img, mask, n_segments, spacing)
-        # print('{0}, {1}, {2}'.format(step_x, step_y, step_z))
+        segments, step_x, step_y, step_z = place_seed_points(image, mask, n_segments, spacing)
 
     elif seed_type == 'grid':
 
@@ -306,8 +265,6 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
         segments_y = grid_y[slices]
         segments_x = grid_x[slices]
 
-
-        # mask_ind = mask[slices].reshape(-1)
         # list of all locations as well as zeros for the color features
         segments_color = np.zeros(segments_z.shape + (image.shape[3],))
         segments = np.concatenate([segments_z[..., np.newaxis],
@@ -319,19 +276,12 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
         if mask is not None:
             ind1 = mask[segments[:, 0].astype('int'), segments[:, 1].astype('int'), segments[:, 2].astype('int')]
             segments = segments[ind1, :]
-
-
-        # seg_list = []
-        # for ii in range(segments.shape[0]):
-        #     if mask[segments[ii, 0], segments[ii, 1], segments[ii, 2]] != 0:
-        #         seg_list.append(ii)
-        # segments = segments[seg_list, :]
     else:
-        raise ValueError('seed_type should be nrandom or grid')
+        raise ValueError('seed_type should be nplace or grid')
 
     segments = np.ascontiguousarray(segments)
 
-    # we do the scaling of ratio in the same way as in the SLIC paper
+    # We do the scaling of ratio in the same way as in the SLIC paper
     # so the values have the same meaning
     step = float(max((step_z, step_y, step_x)))
     ratio = 1.0 / compactness
@@ -339,46 +289,44 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
     image = np.ascontiguousarray(image * ratio, dtype=np.double)
     mask = np.ascontiguousarray(mask, dtype=np.int32)
 
-    segments_old = np.copy(segments)
+    #segments_old = np.copy(segments)
 
     if recompute_seeds:
-
         # Seed step 2: Run SLIC to reinitialise seeds
         # Runs the supervoxel method but only uses distance to better initialise the method
-        labels = _slic_cython(image, mask, segments, step, max_iter, spacing, slic_zero, only_dist=True)
+        labels = _slic_cython(image, mask, segments, step, max_iter, spacing, slic_zero, feat_scale, only_dist=True)
 
-    # Testing
-    if plot_examples:
-        fig = plt.figure()
-        plt.imshow(img)
-        if msk is not None:
-            plt.contour(msk, contours=1, colors='yellow', linewidths=1)
-        plt.scatter(segments_old[:, 2], segments_old[:, 1], color='green')
-        plt.axis('off')
-
-        fig = plt.figure()
-        plt.imshow(img)
-        if msk is not None:
-            plt.contour(msk, contours=1, colors='yellow', linewidths=1)
-        plt.scatter(segments[:, 2], segments[:, 1], color='green')
-        plt.axis('off')
-
-    # image = np.ascontiguousarray(image * ratio)
-
-    labels = _slic_cython(image, mask, segments, step, max_iter, spacing, slic_zero, only_dist=False)
+    labels = _slic_cython(image, mask, segments, step, max_iter, spacing, slic_zero, feat_scale, only_dist=False)
 
     if enforce_connectivity:
-        if msk is None:
-            segment_size = depth * height * width / n_segments
-        else:
-            segment_size = msk.sum() / n_segments
+        segment_size = mask.sum() / n_segments
 
         min_size = int(min_size_factor * segment_size)
         max_size = int(max_size_factor * segment_size)
 
         labels = _enforce_label_connectivity_cython(labels, mask, n_segments, min_size, max_size)
 
+    ret = []
     if is_2d:
-        labels = labels[0]
+        ret.append(labels[0])
+    else:
+        ret.append(labels)
 
-    return labels
+    if return_adjacency:
+        # Also return adjacency map
+        labels = np.ascontiguousarray(labels, dtype=np.int32)
+        if mask is None:
+            adj_mat, border_mat = _find_adjacency_map(labels)
+        else:
+            adj_mat, border_mat = _find_adjacency_map_mask(labels)
+
+        ret.append(adj_mat)
+        ret.append(border_mat)
+
+    if return_segments:
+        ret.append(segments)
+
+    if len(ret) == 1:
+        return ret[0]
+    else:
+        return tuple(ret)

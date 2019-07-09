@@ -1,0 +1,5 @@
+include LICENSE requirements.txt
+recursive-include maskslic *.pyx 
+recursive-exclude maskslic *.cpp *.c
+recursive-include src *.c *.cpp *.h
+

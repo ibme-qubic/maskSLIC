@@ -31,13 +31,13 @@ vector<float> get_mean_point_distance(vector<int> & x, vector<int> & y, vector<i
 
     long dmeas;
     long dist1;
-    long nn;
+    long nn = 0;
 
 
-    for (int m=0; m<x.size(); m++)
+    for (unsigned int m=0; m<x.size(); m++)
     {
         dmeas = numeric_limits<long>::max();
-        for (int n=0; n<x.size(); n++)
+        for (unsigned int n=0; n<x.size(); n++)
         {
             // Skip comparing point to itself
             if (n==m)
@@ -63,7 +63,7 @@ vector<float> get_mean_point_distance(vector<int> & x, vector<int> & y, vector<i
     float d0m = 0;
     float d1m = 0;
     float d2m = 0;
-    for (int r=0; r<sx.size(); r++)
+    for (unsigned int r=0; r<sx.size(); r++)
     {
         d0m += sx.at(r);
         d1m += sy.at(r);

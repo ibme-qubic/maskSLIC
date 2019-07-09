@@ -1,9 +1,7 @@
 """
+maskSLIC: Cython wrapper for some processing scripts
 
-Cython wrapper for some processing scripts
-
-(c) Benjamin Irving 20150713
-
+Copyright (C) 2016-2019, Benjamin Irving
 """
 
 from __future__ import division, print_function, absolute_import
@@ -17,11 +15,13 @@ cdef extern from "processing.h":
 
 def get_mpd(cnp.ndarray[int, ndim=1] x, cnp.ndarray[int, ndim=1] y, cnp.ndarray[int, ndim=1] z):
     """
+    Get the mean distance between points in the region
 
-    Get the maximum distance between two points in the region
-
-    :return:
+    :param x: X co-ordinates of points
+    :param y: Y co-ordinates of points
+    :param z: Z co-ordinates of points
+    
+    :return: Mean distance from a point to it's nearest neighbour, across all points
     """
-
     dist = get_mean_point_distance(x, y, z)
     return np.array(dist)

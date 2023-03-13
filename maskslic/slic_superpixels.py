@@ -242,9 +242,9 @@ def slic(image, n_segments=100, compactness=10., max_iter=10, sigma=0,
     depth, height, width = image.shape[:3]
 
     if mask is None:
-        mask = np.ones(image.shape[:3], dtype=np.bool)
+        mask = np.ones(image.shape[:3], dtype=bool)
     else:
-        mask = np.asarray(mask, dtype=np.bool)
+        mask = np.asarray(mask, dtype=bool)
 
     if mask.ndim == 2:
         mask = mask[np.newaxis, ...]
